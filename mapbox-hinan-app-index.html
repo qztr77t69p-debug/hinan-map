@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<title>災害特化マップ</title>
+<meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no" />
+<!-- Mapbox読み込み -->
+<script src="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.js"></script>
+<script src="https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-language/v1.0.0/mapbox-gl-language.js"></script>
+<link href="https://api.mapbox.com/mapbox-gl-js/v3.8.0/mapbox-gl.css" rel="stylesheet" />
+<!-- firebasejs firestore読み込み -->
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<!-- レイアウト -->
+<style>
+  body { margin: 0; padding: 0; display: flex; height: 100vh; }
+  #map { flex: 1; }
+  #panel {
+    width: 260px; background: #f5f5f5; padding: 10px;
+    font-family: sans-serif; border-left: 1px solid #ccc; overflow-y: auto;
+  }
+  #panel h3 { text-align: center; margin-top: 0; }
+  #panel button { width: 100%; margin-bottom: 6px; padding: 6px; cursor: pointer; }
+  .marker { width:14px;height:14px;background:red;border-radius:50%;border:2px solid white; }
+  .comment-box { max-height: 140px; overflow-y:auto; background:#fff; padding:5px; border:1px solid #ccc; }
+  .comment-item { border-bottom:1px solid #ddd; padding:4px 0; }
+  .comment-time { font-size:10px; color:gray; }
+</style>
+
+</head>
+
+<body>
+<!-- 左側 -->
+<div id="map"></div>
+<!-- 右側 -->
+<div id="panel">
+  <h3>避難場所一覧</h3>
+  <!-- 現在位置更新ボタン -->
+  <button id="locateBtn">現在位置更新or取得</button>
+  
+  <hr>
+  <!-- アラームボタン -->
+  <h3>災害アラーム</h3>
+  <button id="alarmBtn">アラーム ON</button>
+  <label>
+    音量
+    <input type="range" id="volumeSlider" min="0" max="1" step="0.01" value="0.5">
+  </label>
+
+  <audio id="alarmSound" loop>
+    <source src="alarm.mp3" type="audio/mpeg">
+  </audio>
+  <!-- 避難場所の一覧 -->
+  <div id="hinanPlacesList"></div>
+</div>
+
+<script>
+  mapboxgl.accessToken ='pk.eyJ1IjoiaW5vdWUyMiIsImEiOiJjbWo3eWRyYmcwOHZ0M2ZzMnhnanY4Z3Y5In0.2a3sbxsHuEgIW5RH6yAL8g';
+    //Mapboxの初期化
+    const map = new mapboxgl.Map({
+      container: 'map',// container id
+      style: 'mapbox://styles/mapbox/outdoors-v12',
+      center: [136.6624, 36.5621],
+      zoom: 14// starting zoom
+  });
+
+  mapboxgl.setRTLTextPlugin('https://api.mapbox.com/mapbox-gl-js/plugins/mapbox-gl-rtl-text/v0.2.3/mapbox-gl-rtl-text.js');
+  map.addControl(new MapboxLanguage({
+    defaultLanguage: 'ja' 
+  }));
+  map.addControl(new mapboxgl.NavigationControl());
+  //firebase
+  const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_PROJECT.firebaseapp.com",
+    projectId: "YOUR_PROJECT",
+    storageBucket: "YOUR_PROJECT.appspot.com",
+    messagingSenderId: "YOUR_ID",
+    appId: "YOUR_APP_ID"
+  };
+  //firebaseの初期化
+  firebase.initializeApp(firebaseConfig);
+  
+  const db = firebase.firestore();
+  //避難場所のデータ、座標
+  const hinanPlaces = [
+    { name: '富陽小学校体育館（指定緊急避難場所）', lng: 136.6039987, lat: 36.5129263 },
+    { name: '布水中学校体育館（指定緊急避難場所）', lng: 136.6120055, lat: 36.5386493 },
+    { name: '御園小学校体育館（指定緊急避難場所）', lng: 136.6039395, lat: 36.5375957 },
+    { name: '石川県立大学体育館（指定緊急避難場所）', lng: 136.5970883, lat: 36.5073458 },
+    { name: '菅原小学校体育館（指定緊急避難場所）', lng: 136.6166624, lat: 36.5253048 },
+    { name: '野々市中学校体育館（指定緊急避難場所）', lng: 136.6079270, lat: 36.5243884 },
+    { name: '野々市小学校体育館（指定緊急避難場所）', lng: 136.6097490, lat: 36.5321352 },
+    { name: '野々市明倫高校第１・第２体育館（指定緊急避難場所）', lng: 136.6008657, lat: 36.5262065 },
+    { name: '金沢工業大学第二体育館（２０号館）（指定緊急避難場所）', lng: 136.6282279, lat: 36.5276391 },
+    { name: '館野小学校体育館（指定緊急避難場所）', lng: 136.6165327, lat: 36.5404435 },
+    { name: 'スポーツセンター（指定避難場所）', lng: 136.612351, lat: 36.540592 },
+    { name: '中央公民館（指定避難場所）', lng: 136.618469, lat: 36.532643 },
+    { name: '交遊舎（指定避難場所）', lng: 136.598419, lat: 36.542206 },
+    { name: '女性センター（指定避難場所）', lng: 136.605331, lat: 36.53669 },
+    { name: '富奥防災コミュニティセンター（指定避難場所）', lng: 136.605301, lat: 36.511917 },
+    { name: '富陽小学校体育館（指定避難場所）', lng: 136.6039987, lat: 36.5129263 },
+    { name: '市民体育館（指定避難場所）', lng: 136.599627, lat: 36.525644 },
+    { name: '布水中学校体育館（指定避難場所）', lng: 136.6120055, lat: 36.5386493 },
+    { name: '御園小学校体育館（指定避難場所）', lng: 136.6039395, lat: 36.53759577 },
+    { name: '押野公民館（指定避難場所）', lng: 136.616503, lat: 36.540788 },
+    { name: '教育センター（指定避難場所）', lng: 136.610458, lat: 36.529915 },
+    { name: '文化会館フォルテ（指定避難場所）', lng: 136.608459, lat: 36.531845 },
+    { name: '武道館（指定避難場所）', lng: 136.608067, lat: 36.525092 },
+    { name: '石川県立大学体育館（指定避難場所）', lng: 136.5970883, lat: 36.5073458 },
+    { name: '第１コミュニティ消防センター（指定避難場所）', lng: 136.620377, lat: 36.531082 },
+    { name: '第２コミュニティ消防センター（指定避難場所）', lng: 136.604951, lat: 36.51118 },
+    { name: '第３コミュニティ消防防災センター（指定避難場所）', lng: 136.59581, lat: 36.531628 },
+    { name: '第４コミュニティ消防防災センター（指定避難場所）', lng: 136.611063, lat: 36.540853 },
+    { name: '菅原小学校体育館（指定避難場所）', lng: 136.6166624, lat: 36.5253048 },
+    { name: '郷公民館（指定避難場所）', lng: 136.596043, lat: 36.531935 },
+    { name: '野々市中学校体育館（指定避難場所）', lng: 136.6079270, lat: 36.5243884 },
+    { name: '野々市小学校体育館（指定避難場所）', lng: 136.609749, lat: 36.5321352 },
+    { name: '野々市明倫高校第１・第２体育館（指定避難場所）', lng: 136.6008657, lat: 36.5262065 },
+    { name: '金沢工業大学第二体育館（２０号館）（指定避難場所）', lng: 136.6282279, lat: 36.5276391 },
+    { name: '防災コミュニティセンター（指定避難場所）', lng: 136.623842, lat: 36.537888 },
+    { name: '館野小学校体育館（指定避難場所）', lng: 136.6165327, lat: 36.5404435 }
+  ];
+  const markers = {};//マーカーの配列
+  let currentPosition = null;
+  //現在位置からの距離の計算ー関数
+  //Haversine式
+  function calcDistance(lat1, lng1, lat2, lng2) {
+    //地球の半径
+    const R = 6371;
+    //緯度経度の差をラジアンに
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLng = (lng2 - lng1) * Math.PI / 180;
+    //球面三角法
+    const a =
+      Math.sin(dLat/2)**2 +
+      Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) *
+      Math.sin(dLng/2)**2;
+    return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+  }
+  //ページ読み込み
+  map.on('load', () => {
+
+    getCurrentLocation();
+
+    map.once('idle', () => {
+      hinanPlaces.forEach(place => {
+        const el = document.createElement('div');
+        el.className = 'marker';
+
+        const popup = new mapboxgl.Popup({ offset: 25 });
+
+        const marker = new mapboxgl.Marker(el)
+          .setLngLat([place.lng, place.lat])
+          .setPopup(popup)
+          .addTo(map);
+
+        markers[place.name] = { marker, popup, place };
+
+        setupPopup(place.name, popup);
+
+        const btn = document.createElement('button');
+        btn.id = place.name;
+        btn.textContent = place.name + '（距離計算中）';
+        btn.onclick = () => flyToHinanPlaces(place.name);
+        document.getElementById('hinanPlacesList').appendChild(btn);
+      });
+    });
+  });
+  //現在位置
+  let currentMarker = null;
+
+  function getCurrentLocation() {
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        const lat = pos.coords.latitude;
+        const lng = pos.coords.longitude;
+        currentPosition = { lat, lng };
+        //マーカー削除
+        if (currentMarker) currentMarker.remove();
+        // 現在地マーカーの表示
+        currentMarker = new mapboxgl.Marker({ color: 'blue' })
+          .setLngLat([lng, lat])
+          .addTo(map);
+        map.flyTo({
+          center: [lng, lat],
+          zoom: 15,
+          speed: 1.2
+        });
+        // 距離更新
+        updateDistances();
+      },
+      () => {
+        alert('現在地を取得できません');
+      }
+    );
+  }
+  //現在位置の取得ボタン
+  document.getElementById("locateBtn").onclick = () => {
+    getCurrentLocation();
+  };
+  //更新
+  function updateDistances() {
+    hinanPlaces.forEach(place => {
+      const distM = (calcDistance(
+        currentPosition.lat, currentPosition.lng,
+        place.lat, place.lng
+      ) * 1000).toFixed(0);
+
+      document.getElementById(place.name).textContent =`${place.name}（${distM} m）`;
+    });
+  }
+  //マーカーの吹き出し設定
+  function setupPopup(placeName, popup) {
+    const ref = db.collection("comments").doc(placeName).collection("messages");
+
+    popup.on('open', () => {
+
+      const savedName = localStorage.getItem("username") || "";
+
+      popup.setHTML(`
+        <strong>${placeName}</strong><br>
+
+        <div class="comment-box" id="list-${placeName}">
+          読み込み中
+        </div>
+
+        <input id="name-${placeName}" placeholder="名前" value="${savedName}" style="width:95%; margin-top:4px;">
+        <input id="input-${placeName}" placeholder="コメントを書く" style="width:95%; margin-top:4px;">
+        <button onclick="postComment('${placeName}')">投稿</button>` 
+      );
+
+      ref.orderBy("time", "desc").onSnapshot(snapshot => {
+        const box = document.getElementById(`list-${placeName}`);
+        box.innerHTML = "";
+
+        snapshot.forEach(doc => {
+          const d = doc.data();
+          const date = new Date(d.time?.toDate()).toLocaleString();
+
+          box.innerHTML += `
+            <div class="comment-item">
+              <strong>${d.name ?? "匿名"}</strong><br>
+              ${d.text}<br>
+              <span class="comment-time">${date}</span>
+            </div>
+          `;
+        });
+
+        if (!box.innerHTML)
+          box.innerHTML = "コメントはまだありません";
+      });
+    });
+  }
+  //投稿
+  window.postComment = async function(placeName){
+    const nameInput = document.getElementById(`name-${placeName}`);
+    const input = document.getElementById(`input-${placeName}`);
+
+    if(!input.value) return;
+
+    const name = nameInput.value || "匿名";
+
+    localStorage.setItem("username", name);
+
+    await db.collection("comments")
+      .doc(placeName)
+      .collection("messages")
+      .add({
+        text: input.value,
+        name: name,
+        time: firebase.firestore.Timestamp.now()
+      });
+
+    input.value = "";
+  };
+  //押した避難場所に飛ぶ
+  function flyToHinanPlaces(name) {
+    const data = markers[name];
+    map.flyTo({ center: [data.place.lng, data.place.lat], zoom: 16 });
+    data.popup.addTo(map);
+  }
+  //アラーム機能 
+  const alarmBtn = document.getElementById("alarmBtn");
+  const alarmSound = document.getElementById("alarmSound");
+  const volumeSlider = document.getElementById("volumeSlider");
+
+  let alarmOn = false;
+
+  // 初期音量
+  alarmSound.volume = volumeSlider.value;
+  // 音量調節
+  volumeSlider.addEventListener("input", () => {
+    alarmSound.volume = volumeSlider.value;
+  });
+  // アラームのONとOFF
+  alarmBtn.onclick = async () => {
+    if (!alarmOn) {
+      try {
+        await alarmSound.play();
+        alarmBtn.textContent = "アラーム OFF";
+        alarmOn = true;
+      } catch (e) {
+        alert("アラームを再生できません");
+      }
+    } else {
+      alarmSound.pause();
+      alarmSound.currentTime = 0;
+      alarmBtn.textContent = "アラーム ON";
+      alarmOn = false;
+    }
+  };
+</script>
+</body>
+</html>
